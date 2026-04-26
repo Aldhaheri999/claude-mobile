@@ -1095,7 +1095,20 @@ function wireSessionProc(session) {
 
   session.proc.onData((data) => {
     if (session.generation !== gen) return; // stale handler from previous proc
-    session.scrollback += data;
+    // When a TUI repaints (RIS, erase-scrollback, or clear-entire-screen),
+    // content before that point is dead from the user's perspective. Truncate
+    // the buffer at that boundary so reconnects don't replay duplicate banners
+    // stacked from prior Claude Code restarts. Edge case: a chunk split mid-
+    // escape isn't handled -- acceptable since these escapes are 2-3 bytes and
+    // node-pty rarely splits them.
+    const REPAINT_RE = /\x1bc|\x1b\[3J|\x1b\[2J/g;
+    let lastRepaintIdx = -1, _m;
+    while ((_m = REPAINT_RE.exec(data)) !== null) lastRepaintIdx = _m.index;
+    if (lastRepaintIdx >= 0 && session.scrollback.length > 0) {
+      session.scrollback = data.slice(lastRepaintIdx);
+    } else {
+      session.scrollback += data;
+    }
     if (session.scrollback.length > SCROLLBACK_SIZE) {
       let start = session.scrollback.length - SCROLLBACK_SIZE;
       // Skip forward past a broken surrogate pair or partial ANSI escape
