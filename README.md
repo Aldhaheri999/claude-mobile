@@ -1,11 +1,13 @@
-# Claude Mobile v3.1.3
+# Claude Mobile v3.1.6 (Aldhaheri999 fork)
 
 Mobile terminal gateway for Claude Code. Access your Claude Code sessions from your iPhone over Tailscale VPN with end-to-end encryption, Face ID authentication, and persistent dtach sessions.
+
+> Fork of [Mister-ams/claude-mobile](https://github.com/Mister-ams/claude-mobile). Adds an iOS Safari rendering fix (Canvas renderer instead of WebGL — fixes the Claude Code TUI banner stacking on top of itself) and TOTP-secret hardening (atomic writes, backup recovery, graceful shutdown).
 
 ## Quick Install
 
 ```bash
-git clone https://github.com/Mister-ams/claude-mobile.git
+git clone https://github.com/Aldhaheri999/claude-mobile.git
 cd claude-mobile
 bash install.sh
 ```

@@ -886,16 +886,24 @@ function switchTo(id) {
     terms[id] = term;
     fits[id] = fitAddon;
 
-    // GPU-accelerated rendering: WebGL -> Canvas -> DOM fallback
+    // GPU-accelerated rendering: Canvas on iOS Safari (WebGL renderer has a cell-
+    // alignment bug on iOS WebKit where rows of the Claude Code TUI banner render
+    // on top of each other), WebGL -> Canvas -> DOM elsewhere.
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.userAgent.includes('Mac') && navigator.maxTouchPoints > 1);
     try {
-      const webgl = new WebglAddon.WebglAddon();
-      webgl.onContextLost(() => {
-        webgl.dispose();
-        try { term.loadAddon(new CanvasAddon.CanvasAddon()); } catch (e2) { console.warn('Canvas fallback failed:', e2.message); }
-      });
-      term.loadAddon(webgl);
+      if (isIOS) {
+        term.loadAddon(new CanvasAddon.CanvasAddon());
+      } else {
+        const webgl = new WebglAddon.WebglAddon();
+        webgl.onContextLost(() => {
+          webgl.dispose();
+          try { term.loadAddon(new CanvasAddon.CanvasAddon()); } catch (e2) { console.warn('Canvas fallback failed:', e2.message); }
+        });
+        term.loadAddon(webgl);
+      }
     } catch (e) {
-      console.warn('WebGL failed:', e.message);
+      console.warn('Renderer init failed:', e.message);
       try { term.loadAddon(new CanvasAddon.CanvasAddon()); } catch (e2) { console.warn('Canvas failed:', e2.message); }
     }
 
