@@ -788,22 +788,12 @@ function handle(m) {
       break;
     case 'scrollback':
       if (terms[m.session] && m.data) {
+        // v3.2: server now sends a serialized snapshot from a headless xterm
+        // (compact ANSI stream that reconstructs current screen + scrollback).
+        // Single write -- no more chunking, no banner stacking.
         const term = terms[m.session];
         term.reset();
-        const lines = m.data.split('\n');
-        const CHUNK = 50;
-        let i = 0;
-        function writeNextChunk() {
-          if (i >= lines.length) {
-            term.scrollToBottom();
-            return;
-          }
-          const chunk = lines.slice(i, i + CHUNK).join('\n');
-          i += CHUNK;
-          const separator = (i < lines.length) ? '\n' : '';
-          term.write(chunk + separator, writeNextChunk);
-        }
-        writeNextChunk();
+        term.write(m.data, () => term.scrollToBottom());
       }
       break;
     case 'attention':

@@ -12,6 +12,23 @@ const {
   generateAuthenticationOptions, verifyAuthenticationResponse
 } = require('@simplewebauthn/server');
 const { TOTP, Secret } = require('otpauth');
+// v3.2: headless xterm.js + serialize addon for proper screen-state replay on
+// reconnect. Replaces the raw-byte scrollback buffer that caused TUI banners
+// (Claude Code's welcome card) to stack on every restart.
+const { Terminal: HeadlessTerminal } = require('@xterm/headless');
+const { SerializeAddon } = require('@xterm/addon-serialize');
+
+function makeHeadlessTerm(cols, rows) {
+  const term = new HeadlessTerminal({
+    cols: cols || 80,
+    rows: rows || 24,
+    scrollback: HEADLESS_SCROLLBACK_ROWS,
+    allowProposedApi: true,
+  });
+  const serializer = new SerializeAddon();
+  term.loadAddon(serializer);
+  return { term, serializer };
+}
 
 // ─── Config ──────────────────────────────────────────────────────
 let config;
@@ -29,7 +46,9 @@ try {
 }
 const PORT = process.env.PORT || config.port || 3456;
 const MAX_SESSIONS = 8;
-const SCROLLBACK_SIZE = 400000;
+// v3.2: scrollback is now stored in the headless terminal grid (1000 rows
+// per session). The legacy 400KB raw byte cap is no longer used.
+const HEADLESS_SCROLLBACK_ROWS = 1000;
 
 // ─── dtach session persistence (via WSL) ─────────────────────────
 const WSL_DISTRO = config.wslDistro || 'Ubuntu-24.04';
@@ -1095,26 +1114,14 @@ function wireSessionProc(session) {
 
   session.proc.onData((data) => {
     if (session.generation !== gen) return; // stale handler from previous proc
-    // When a TUI repaints (RIS, erase-scrollback, or clear-entire-screen),
-    // content before that point is dead from the user's perspective. Truncate
-    // the buffer at that boundary so reconnects don't replay duplicate banners
-    // stacked from prior Claude Code restarts. Edge case: a chunk split mid-
-    // escape isn't handled -- acceptable since these escapes are 2-3 bytes and
-    // node-pty rarely splits them.
-    const REPAINT_RE = /\x1bc|\x1b\[3J|\x1b\[2J/g;
-    let lastRepaintIdx = -1, _m;
-    while ((_m = REPAINT_RE.exec(data)) !== null) lastRepaintIdx = _m.index;
-    if (lastRepaintIdx >= 0 && session.scrollback.length > 0) {
-      session.scrollback = data.slice(lastRepaintIdx);
-    } else {
-      session.scrollback += data;
-    }
-    if (session.scrollback.length > SCROLLBACK_SIZE) {
-      let start = session.scrollback.length - SCROLLBACK_SIZE;
-      // Skip forward past a broken surrogate pair or partial ANSI escape
-      const code = session.scrollback.charCodeAt(start);
-      if (code >= 0xDC00 && code <= 0xDFFF) start++; // low surrogate without high
-      session.scrollback = session.scrollback.slice(start);
+    // v3.2: feed bytes to the headless terminal. It maintains a virtual screen
+    // + scrollback grid that interprets clear-screen / cursor-positioning
+    // escapes correctly, so banner-stacking can't happen. On reconnect we send
+    // serialize() output instead of a raw byte history.
+    if (session.headless) {
+      try { session.headless.write(data); } catch (e) {
+        audit('WARN', `headless write failed session=${id}: ${e.message}`);
+      }
     }
     updateRecentOutput(id, data);
 
@@ -1165,6 +1172,12 @@ function wireSessionProc(session) {
     } else {
       // dtach session is gone -- clean up
       if (session.attentionTimer) clearTimeout(session.attentionTimer);
+      // v3.2: dispose headless terminal alongside the dead PTY
+      if (session.headless) {
+        try { session.headless.dispose(); } catch (e) { audit('WARN', 'headless dispose (onExit): ' + e.message); }
+        session.headless = null;
+        session.serializer = null;
+      }
       recentOutput.delete(id);
       sessions.delete(id);
       broadcastSessions();
@@ -1208,8 +1221,11 @@ async function createSession(name, dir, cols, rows) {
     }
   }, 500);
 
+  const headlessParts = makeHeadlessTerm(cols || 50, rows || 30);
   const session = {
-    id, name, dir, proc, scrollback: '', generation: 0,
+    id, name, dir, proc, generation: 0,
+    headless: headlessParts.term, serializer: headlessParts.serializer,
+    lastCols: cols || 50, lastRows: rows || 30,
     attention: null, attentionTimer: null, clients: new Set()
   };
 
@@ -1244,9 +1260,13 @@ function recoverDtachSessions() {
       const proc = attachToDtach(idNum, 80, 24);
       console.log(`  dtach attach: pid=${proc.pid} for ${metaKey}`);
 
+      const headlessParts = makeHeadlessTerm(80, 24);
       const session = {
         id: idNum, name, dir, proc, generation: 0,
-        scrollback: '', // rebuilds from live output
+        // v3.2: headless rebuilds from live output (recovered sessions show
+        // current screen only on first reconnect; pre-restart state is gone)
+        headless: headlessParts.term, serializer: headlessParts.serializer,
+        lastCols: 80, lastRows: 24,
         attention: null, attentionTimer: null, clients: new Set()
       };
 
@@ -1491,11 +1511,21 @@ wss.on('connection', (ws, req) => {
         }
         ws.currentSession = msg.session;
         targetSession.clients.add(ws);
-        // Send server-side scrollback buffer on reconnect.
-        // Client uses chunked writes with term.reset() to replay cleanly.
-        if (targetSession.scrollback) {
-          audit('SCROLLBACK', `sending ${targetSession.scrollback.length} bytes from buffer`);
-          secureSend(ws, { type: 'scrollback', session: targetSession.id, data: targetSession.scrollback });
+        // v3.2: send a serialized snapshot of the headless terminal state.
+        // The snapshot is a compact ANSI stream that reconstructs the current
+        // screen + N rows of scrollback -- not the raw byte history. Banner
+        // dedup happens for free because the headless term interprets the
+        // clear-screen escapes that the previous append-only buffer just stored.
+        if (targetSession.serializer && targetSession.headless && targetSession.headless.cols > 0) {
+          try {
+            const snapshot = targetSession.serializer.serialize({ scrollback: 1000 });
+            if (snapshot.length > 0) {
+              audit('SCROLLBACK', `sending ${snapshot.length} bytes (serialized snapshot)`);
+              secureSend(ws, { type: 'scrollback', session: targetSession.id, data: snapshot });
+            }
+          } catch (e) {
+            audit('WARN', `serialize failed for session=${targetSession.id}: ${e.message}`);
+          }
         }
         if (targetSession.attention) {
           secureSend(ws, { type: 'attention', session: targetSession.id, reason: targetSession.attention });
@@ -1535,6 +1565,14 @@ wss.on('connection', (ws, req) => {
         try {
           activeSession.proc.resize(cols, rows);
         } catch (e) { audit('WARN', 'resize failed session=' + ws.currentSession + ': ' + e.message); }
+        // v3.2: keep headless terminal dims in sync with the PTY -- if these
+        // drift, serialize() output will have wrong cols and lines will wrap
+        // weirdly on the client.
+        if (activeSession.headless) {
+          try { activeSession.headless.resize(cols, rows); } catch (e) {
+            audit('WARN', `headless resize failed session=${ws.currentSession}: ${e.message}`);
+          }
+        }
         break;
       }
 
@@ -1557,6 +1595,13 @@ wss.on('connection', (ws, req) => {
         targetSession.proc = null; // prevent onExit from double-broadcasting
         try { proc.kill(); } catch (e) { audit('WARN', 'proc.kill: ' + e.message); }
         if (targetSession.attentionTimer) clearTimeout(targetSession.attentionTimer);
+        // v3.2: dispose headless terminal to free its screen+scrollback grid.
+        // Without this, sessions accumulate ~750 KB each over server lifetime.
+        if (targetSession.headless) {
+          try { targetSession.headless.dispose(); } catch (e) { audit('WARN', 'headless dispose: ' + e.message); }
+          targetSession.headless = null;
+          targetSession.serializer = null;
+        }
         recentOutput.delete(msg.session);
         sessions.delete(msg.session);
         if (ws.currentSession === msg.session) ws.currentSession = null;

@@ -1,8 +1,8 @@
-# Claude Mobile v3.1.7 (Aldhaheri999 fork)
+# Claude Mobile v3.2.0 (Aldhaheri999 fork)
 
 Mobile terminal gateway for Claude Code. Access your Claude Code sessions from your iPhone over Tailscale VPN with end-to-end encryption, Face ID authentication, and persistent dtach sessions.
 
-> Fork of [Mister-ams/claude-mobile](https://github.com/Mister-ams/claude-mobile). Adds server-side scrollback truncation at TUI repaint escapes (so the Claude Code welcome banner doesn't pile up after multiple restarts) and TOTP-secret hardening (atomic writes, backup recovery, graceful shutdown).
+> Fork of [Mister-ams/claude-mobile](https://github.com/Mister-ams/claude-mobile). Migrates the scrollback layer to `@xterm/headless` + `@xterm/addon-serialize` (the architecture VS Code uses) so the Claude Code welcome banner stops piling up after multiple restarts and reconnect payloads shrink ~10×. Also includes TOTP-secret hardening (atomic writes, backup recovery, graceful shutdown). See [`CHANGELOG.md`](./CHANGELOG.md) for the full change log.
 
 ## Quick Install
 
