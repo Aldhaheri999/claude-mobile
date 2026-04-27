@@ -1,4 +1,4 @@
-# Claude Mobile v3.2.0 (Aldhaheri999 fork)
+# Claude Mobile v3.2.1 (Aldhaheri999 fork)
 
 Mobile terminal gateway for Claude Code. Access your Claude Code sessions from your iPhone over Tailscale VPN with end-to-end encryption, Face ID authentication, and persistent dtach sessions.
 

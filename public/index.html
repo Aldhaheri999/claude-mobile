@@ -845,7 +845,11 @@ function getTermTheme() {
 
 function makeTerm() {
   const term = new Terminal({
-    fontSize: 13,
+    // v3.2.1: fontSize 13 -> 11. Claude Code v2.x's TUI uses absolute cursor
+    // positioning that assumes cols >= ~70; at iPhone-narrow cols it collides
+    // its own UI elements (status bar + separator + prompt) on the same cells.
+    // Smaller font widens the effective cols so collisions are reduced.
+    fontSize: 11,
     fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
     lineHeight: 1.286,
     theme: getTermTheme(),
@@ -1030,7 +1034,7 @@ function newSession() {
   const defaultDir = (projects && projects.length) ? projects[0].dir : '';
   // Send screen dimensions so dtach session matches phone width
   const termArea = document.getElementById('term-area');
-  const charW = 7.8; // approximate char width at 13px SF Mono
+  const charW = 6.6; // approximate char width at 11px SF Mono (v3.2.1)
   const lineH = 13 * 1.286; // fontSize * lineHeight
   const cols = Math.floor((termArea?.clientWidth || 320) / charW);
   const rows = 200;

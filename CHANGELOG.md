@@ -6,6 +6,56 @@ Newest at top.
 
 ---
 
+## v3.2.1 — 2026-04-27
+
+### Reduce iPhone fontSize 13 → 11 to widen effective cols
+
+**The change.** `public/index.html`: `Terminal({ fontSize: 11, ... })` (was 13).
+Updated the matching `charW` constant (used in initial cols calculation) from
+`7.8` to `6.6`.
+
+**Why.** After v3.2.0 deployed, the user reported continued text overlap on
+iPhone. Investigation: `node scratch/test-headless.js` rendered the captured
+Claude Code banner cleanly (proves v3.2's byte layer is correct). But at
+cols=46-50 (the iPhone's effective width with fontSize 13), Claude Code v2.x's
+TUI itself positions multiple UI elements (status separator, "[ waiting for
+first message ]", "Opus 4.7" model indicator, "◉ xhigh · /effort" effort badge)
+at cell coordinates that **collide** -- those elements are designed for cols
+≥80. At narrow cols xterm.js writes them to overlapping cells, the second
+write overwrites the first, and the visible result is fragments of multiple
+elements appearing on the same row.
+
+This is **upstream of v3.2** -- Claude Code's narrow-terminal TUI behaviour,
+not anything claude-mobile can fix at the byte/buffer/transport layer.
+
+**Mitigation, not a full fix.** Reducing fontSize widens the effective cols
+on iPhone:
+- fontSize 13 → cols ≈ 46 (collisions present)
+- fontSize 11 → cols ≈ 57 (collisions reduced but not eliminated)
+- fontSize  9 → cols ≈ 70 (likely clean, but small to read)
+
+Settling on 11 as a readability/cleanness compromise. If 11 is still
+problematic, the next lever is fontSize 10 or 9 -- one-line edit at
+`public/index.html:858`.
+
+**Verification.** Test runs confirmed the overlap is in the source bytes, not
+the v3.2 layer:
+```
+cols=46: row text 644 chars (multiple UI elements jammed onto one cell row)
+cols=80: row text 435 chars (elements have natural separation)
+cols=100: row text 266 chars (clean)
+```
+The headless terminal correctly applies all writes -- the overlap is faithful
+to Claude Code's intent at narrow widths.
+
+**No test added.** This fix is environmental (depends on real iOS Safari font
+metrics), not algorithmic. Existing v3.2.0 tests still pass.
+
+**Rollback if it makes readability worse.** Single-line revert to fontSize 13
+at `public/index.html:858`.
+
+---
+
 ## v3.2.0 — 2026-04-27
 
 ### Migrate scrollback to `@xterm/headless` + `@xterm/addon-serialize`
